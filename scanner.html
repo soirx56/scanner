@@ -327,9 +327,19 @@ progress::-moz-progress-bar{background:#00875f;border-radius:6px}
             <label style="color:#A0AEC0;font-size:13px">CV ≤ <select id="rankFilterCV" onchange="renderRankings()" style="background:#1A1C23;color:#E2E8F0;border:1px solid #2D3748;border-radius:6px;padding:4px 8px"><option value="100">Todos</option><option value="25">25%</option><option value="30">30%</option><option value="35" selected>35%</option><option value="40">40%</option><option value="50">50%</option></select></label>
             <label style="color:#A0AEC0;font-size:13px">Média FT ≥ <select id="rankFilterMedia" onchange="renderRankings()" style="background:#1A1C23;color:#E2E8F0;border:1px solid #2D3748;border-radius:6px;padding:4px 8px"><option value="0">Todos</option><option value="7">7.0</option><option value="8" selected>8.0</option><option value="9">9.0</option><option value="10">10.0</option></select></label>
         </div>
-        <div style="display:flex;gap:10px;margin-bottom:15px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px">
+            <button id="btnBaixarDados" class="btn-action" onclick="baixarDadosRankings()" style="background:linear-gradient(135deg,#38bdf8,#0ea5e9)">📥 Baixar Dados</button>
             <button id="btnGerarRanking" class="btn-action" onclick="gerarRankings()" style="background:linear-gradient(135deg,#667eea,#764ba2)">🏆 Gerar Rankings</button>
             <button id="btnPararRanking" class="btn-action" onclick="pararRankings()" style="background:#E25C5C;display:none">⏹ Parar</button>
+        </div>
+        <div id="rankDownloadProgressContainer" style="display:none;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                <span id="rankDownloadStatusText" style="color:#A0AEC0;font-size:13px">Baixando...</span>
+                <span id="rankDownloadProgressPct" style="color:#38bdf8;font-size:13px">0%</span>
+            </div>
+            <div style="background:#1A1C23;border-radius:8px;height:6px;overflow:hidden">
+                <div id="rankDownloadProgress" style="background:linear-gradient(90deg,#38bdf8,#0ea5e9);height:100%;width:0%;transition:width .3s"></div>
+            </div>
         </div>
         <div id="rankProgressContainer" style="display:none;margin-bottom:15px">
             <div style="display:flex;justify-content:space-between;margin-bottom:5px">
@@ -374,7 +384,7 @@ var shieldFB='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcv
 var leagueFB='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM3YzdjOGEiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCI+PC9jaXJjbGU+PHBhdGggZD0iTTIgMTJoMjAiPjwvcGF0aD48cGF0aCBkPSJNMTIgMmExNS4zIDE1LjMgMCAwIDEgNCAxMGExNS4zIDE1LjMgMCAwIDEtNCAxMGExNS4zIDE1LjMgMCAwIDEtNC0xMGExNS4zIDE1LjMgMCAwIDEgNC0xMHoiPjwvcGF0aD48L3N2Zz4=';
 var todosOsJogosHoje=[];var currentOffset=0;var isScanning=false;var matchCount=0;
 var cornerCache={};var scanSkipped=0;
-var rankResults=[];var isRankScanning=false;var rankSkipped=0;
+var rankResults=[];var isRankScanning=false;var rankSkipped=0;var isRankDownloading=false;var rankSemDados=0;
 var analysisCache={};
 var EXCLUDED_TERMS=['u17','u18','u19','u20','u21','u23','sub-17','sub-18','sub-19','sub-20','sub-21','sub-23','sub 17','sub 18','sub 19','sub 20','sub 21','sub 23','under 17','under 18','under 19','under 20','under 21','women','feminino','feminin','femenin','féminin',"women's",'w)','(w)','amistoso','friendly','amichevol','reserves','reservas','youth'];
 var DOW=['DOM','SEG','TER','QUA','QUI','SEX','SAB'];
@@ -852,9 +862,43 @@ async function atualizarPrevisoesTelegram() {
 }
 
 /* ===== RANKINGS ===== */
+async function baixarDadosRankings(){
+  if(isRankDownloading||isRankScanning)return;
+  var allGames=[];todosOsJogosHoje.forEach(function(l){l.jogos.forEach(function(g){allGames.push(g);});});
+  if(!allGames.length){alert('Carregue os jogos do dia primeiro no Painel!');return;}
+  isRankDownloading=true;
+  var btn=document.getElementById('btnBaixarDados');
+  btn.disabled=true;btn.innerHTML='⏳ Baixando...';
+  document.getElementById('rankDownloadProgressContainer').style.display='block';
+  var queue=allGames.slice(),total=queue.length,processed=0,activeReqs=0,doCached=0;
+  function updD(){var pct=Math.round((processed/total)*100);document.getElementById('rankDownloadProgress').style.width=pct+'%';document.getElementById('rankDownloadProgressPct').textContent=pct+'%';document.getElementById('rankDownloadStatusText').textContent='Baixando '+processed+'/'+total+' jogos... ('+doCached+' do cache)';}
+  await new Promise(function(resolve){
+    var w=setInterval(function(){
+      if(!isRankDownloading){clearInterval(w);resolve();return;}
+      if(!queue.length&&activeReqs===0){clearInterval(w);resolve();return;}
+      while(activeReqs<3&&queue.length>0&&isRankDownloading){
+        var gi=queue.shift();
+        activeReqs++;
+        (async function(g){
+          try{
+            var gid=g.id||g.game_id;
+            if(isExcludedGame(g))return;
+            if(analysisCache[gid+'_20']){doCached++;return;}
+            await checkMarketBase20(gid);
+            await fetchAnalysis(gid,'20');
+          }catch(e){console.log('Download rank error game '+gid+':',e);}
+        })(gi).then(function(){activeReqs--;processed++;updD();});
+      }
+    },100);
+  });
+  isRankDownloading=false;
+  btn.disabled=false;btn.innerHTML='📥 Baixar Dados';
+  document.getElementById('rankDownloadProgressContainer').style.display='none';
+  alert('✅ Download concluído! '+processed+' jogos processados ('+doCached+' já estavam no cache).');
+}
 async function gerarRankings(){
   if(isRankScanning)return;
-  isRankScanning=true;rankResults=[];rankSkipped=0;
+  isRankScanning=true;rankResults=[];rankSkipped=0;rankSemDados=0;
   document.getElementById('btnGerarRanking').style.display='none';
   document.getElementById('btnPararRanking').style.display='inline-block';
   document.getElementById('rankProgressContainer').style.display='block';
@@ -869,9 +913,10 @@ async function gerarRankings(){
     if(isExcludedGame(gi)){rankSkipped++;analisados++;updateRankProgress(analisados,total);continue;}
     var gid=gi.id||gi.game_id;
     try{
-      var hasMarket=await checkMarketBase20(gid);
-      var data=await fetchAnalysis(gid,'20');
-      if(!data){analisados++;updateRankProgress(analisados,total);continue;}
+      var data=analysisCache[gid+'_20'];
+      if(!data){rankSemDados++;analisados++;updateRankProgress(analisados,total);continue;}
+      var cachedMerc=checkCornerCache(gid);
+      var hasMarket=cachedMerc!==null?cachedMerc:(data.game&&data.game.hasCornerMarket!==false);
       var mediaFT=0,mediaHT=0,cv=100,marcadosCasa=0,sofridosFora=0;
       if(data.totalCorner&&data.totalCorner.total){mediaFT=parseFloat(data.totalCorner.total.avg)||0;cv=parseFloat(data.totalCorner.total.cv)||100;marcadosCasa=parseFloat(data.totalCorner.total.h)||0;sofridosFora=parseFloat(data.totalCorner.total.a)||0;}
       if(data.totalCorner&&data.totalCorner.first){mediaHT=parseFloat(data.totalCorner.first.avg)||0;}
@@ -880,16 +925,14 @@ async function gerarRankings(){
       var scoreV2=calcScoreV2(data,9.5);
       if(hasMarket)scoreV2=Math.min(100,scoreV2+10);
       rankResults.push({id:gid,home:gi.home_name||gi.home||'',away:gi.away_name||gi.away||'',league:gi.league_name||gi.league||'',hora:gi.time||gi.hour||'',score:scoreV2,mediaFT:mediaFT,mediaHT:mediaHT,cv:cv,marcados:marcadosCasa,sofridos:sofridosFora,sequencia:maiorSeq,hasMarket:hasMarket});
-    }catch(e){console.log('Rank error:',gid,e);}
+    }catch(e){console.log('Rank error processing game '+gid+':',e);}
     analisados++;updateRankProgress(analisados,total);
-    await sleep(100);
   }
   isRankScanning=false;
   document.getElementById('btnGerarRanking').style.display='inline-block';
   document.getElementById('btnPararRanking').style.display='none';
-  document.getElementById('rankSortContainer').style.display='block';
-  document.getElementById('rankResultsContainer').style.display='block';
-  renderRankings();
+  document.getElementById('rankProgressContainer').style.display='none';
+  if(rankResults.length>0){document.getElementById('rankSortContainer').style.display='block';document.getElementById('rankResultsContainer').style.display='block';renderRankings();}
 }
 function pararRankings(){
   isRankScanning=false;
@@ -901,7 +944,7 @@ function updateRankProgress(atual,total){
   var pct=Math.round((atual/total)*100);
   document.getElementById('rankProgress').style.width=pct+'%';
   document.getElementById('rankProgressPct').textContent=pct+'%';
-  document.getElementById('rankStatusText').textContent='Analisando '+atual+'/'+total+' jogos... ('+rankResults.length+' válidos, '+rankSkipped+' excluídos)';
+  document.getElementById('rankStatusText').textContent='Analisando '+atual+'/'+total+' jogos... ('+rankResults.length+' válidos, '+rankSkipped+' excluídos'+(rankSemDados>0?', '+rankSemDados+' sem dados':'')+')';
 }
 function renderRankings(){
   var sortBy=document.getElementById('rankSortBy').value;
@@ -914,6 +957,7 @@ function renderRankings(){
   var resumoHTML='<div class="bt-summary-card"><div class="bt-summary-val">'+rankResults.length+'</div><div class="bt-summary-lbl">Total Analisados</div></div>';
   resumoHTML+='<div class="bt-summary-card"><div class="bt-summary-val">'+filtered.length+'</div><div class="bt-summary-lbl">Filtrados</div></div>';
   resumoHTML+='<div class="bt-summary-card"><div class="bt-summary-val">'+rankSkipped+'</div><div class="bt-summary-lbl">Excluídos</div></div>';
+  resumoHTML+='<div class="bt-summary-card"><div class="bt-summary-val">'+rankSemDados+'</div><div class="bt-summary-lbl">Sem Dados</div></div>';
   resumoHTML+='<div class="bt-summary-card"><div class="bt-summary-val">'+comMercado+'</div><div class="bt-summary-lbl">Com Mercado</div></div>';
   document.getElementById('rankSummary').innerHTML=resumoHTML;
   var tbody='';
